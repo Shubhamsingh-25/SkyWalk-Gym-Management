@@ -2,6 +2,8 @@ import streamlit as st
 from database import supabase
 from datetime import date
 from dateutil.relativedelta import relativedelta
+import qrcode
+import io
 
 
 st.set_page_config(
