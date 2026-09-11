@@ -1,6 +1,6 @@
 import streamlit as st
 from database import supabase
-from datetime import date
+from datetime import date, timedelta
 from dateutil.relativedelta import relativedelta
 import qrcode
 import io
@@ -206,6 +206,8 @@ def get_plans():
 def dashboard():
 
     members = get_members()
+    today = date.today()
+    today_iso = today.isoformat()
 
     active = [
         x for x in members
@@ -217,92 +219,200 @@ def dashboard():
         if x.get("membership_status") == "expiring_soon"
     ]
 
-    today = date.today().isoformat()
-
-    attendance = (
-        supabase
-        .table("attendance")
-        .select("id")
-        .eq("gym_id", gym_id())
-        .eq("attendance_date", today)
-        .execute()
-    )
-
-    st.title(f"🏋️ {st.session_state.gym['name']}")
-
-    st.caption(
-        f"Welcome, "
-        f"{st.session_state.gym.get('owner_name') or 'Owner'}"
-    )
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    c1.metric("Total Members", len(members))
-    c2.metric("Active Members", len(active))
-    c3.metric("Expiring Soon", len(expiring))
-    c4.metric("Today's Attendance", len(attendance.data))
-
-    st.divider()
-
-    # =====================================================
-    # MEMBERSHIP EXPIRY ALERTS
-    # =====================================================
-
     expired = [
         x for x in members
         if x.get("membership_status") == "expired"
     ]
 
+    attendance_result = (
+        supabase
+        .table("attendance")
+        .select("*")
+        .eq("gym_id", gym_id())
+        .eq("attendance_date", today_iso)
+        .order("check_in_at", desc=True)
+        .execute()
+    )
+    today_attendance = attendance_result.data or []
+
+    payments_result = (
+        supabase
+        .table("payments")
+        .select("*")
+        .eq("gym_id", gym_id())
+        .order("payment_date", desc=True)
+        .execute()
+    )
+    payments = payments_result.data or []
+
+    paid_payments = [
+        p for p in payments
+        if p.get("payment_status") == "paid"
+    ]
+
+    total_revenue = sum(float(p.get("amount") or 0) for p in paid_payments)
+
+    month_start = today.replace(day=1)
+    monthly_revenue = sum(
+        float(p.get("amount") or 0)
+        for p in paid_payments
+        if p.get("payment_date") and
+        str(p["payment_date"])[:10] >= month_start.isoformat()
+    )
+
+    attendance_rate = (
+        round((len(today_attendance) / len(active)) * 100)
+        if active else 0
+    )
+
+    # Header
+    st.title(f"🏋️ {st.session_state.gym['name']}")
+    st.caption(
+        f"Welcome, {st.session_state.gym.get('owner_name') or 'Owner'} • "
+        f"{today.strftime('%A, %d %B %Y')}"
+    )
+
+    # KPI cards
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("👥 Total Members", len(members))
+    c2.metric("🟢 Active Members", len(active))
+    c3.metric("📅 Today's Check-ins", len(today_attendance))
+    c4.metric("💰 Total Revenue", f"₹{total_revenue:,.0f}")
+
+    c5, c6, c7, c8 = st.columns(4)
+    c5.metric("⚠️ Expiring Soon", len(expiring))
+    c6.metric("🚨 Expired", len(expired))
+    c7.metric("📈 This Month", f"₹{monthly_revenue:,.0f}")
+    c8.metric("🎯 Today's Attendance", f"{attendance_rate}%")
+
+    st.divider()
+
+    # Alerts
     st.subheader("🔔 Membership Alerts")
-
-    if expiring:
-        st.warning(
-            f"⚠️ {len(expiring)} member(s) have membership expiring soon."
-        )
-
-        st.dataframe(
-            [
-                {
-                    "Member ID": x["member_code"],
-                    "Name": x["full_name"],
-                    "Plan": x.get("plan_name_snapshot") or "-",
-                    "Expiry Date": x.get("end_date") or "-",
-                    "Status": "Expiring Soon"
-                }
-                for x in expiring
-            ],
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.success("✅ No memberships are expiring soon.")
 
     if expired:
         st.error(
             f"🚨 {len(expired)} member(s) have expired membership."
         )
-
         st.dataframe(
             [
                 {
                     "Member ID": x["member_code"],
                     "Name": x["full_name"],
                     "Plan": x.get("plan_name_snapshot") or "-",
-                    "Expiry Date": x.get("end_date") or "-",
+                    "Expiry": x.get("end_date") or "-",
                     "Status": "Expired"
                 }
-                for x in expired
+                for x in expired[:10]
             ],
             use_container_width=True,
             hide_index=True
         )
+
+    if expiring:
+        st.warning(
+            f"⚠️ {len(expiring)} member(s) have membership expiring soon."
+        )
+        st.dataframe(
+            [
+                {
+                    "Member ID": x["member_code"],
+                    "Name": x["full_name"],
+                    "Plan": x.get("plan_name_snapshot") or "-",
+                    "Expiry": x.get("end_date") or "-",
+                    "Status": "Expiring Soon"
+                }
+                for x in expiring[:10]
+            ],
+            use_container_width=True,
+            hide_index=True
+        )
+
+    if not expired and not expiring:
+        st.success("✅ All memberships are currently in good standing.")
+
+    st.divider()
+
+    # Today's attendance
+    left, right = st.columns([1.4, 1])
+
+    with left:
+        st.subheader("📋 Today's Attendance")
+
+        if today_attendance:
+            member_lookup = {
+                x["member_id"]: x for x in members
+            }
+
+            attendance_rows = []
+            for a in today_attendance[:10]:
+                m = member_lookup.get(a["member_id"])
+                attendance_rows.append({
+                    "Member ID": m["member_code"] if m else "-",
+                    "Name": m["full_name"] if m else "-",
+                    "Check In": a.get("check_in_at") or "-",
+                    "Source": str(a.get("source") or "manual").title()
+                })
+
+            st.dataframe(
+                attendance_rows,
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("No attendance has been marked today.")
+
+    with right:
+        st.subheader("💳 Recent Payments")
+
+        if payments:
+            member_lookup = {
+                x["member_id"]: x for x in members
+            }
+
+            payment_rows = []
+            for p in payments[:7]:
+                m = member_lookup.get(p.get("member_id"))
+                payment_rows.append({
+                    "Member": m["full_name"] if m else "-",
+                    "Amount": f"₹{float(p.get('amount') or 0):,.0f}",
+                    "Date": p.get("payment_date") or "-",
+                    "Method": str(
+                        p.get("payment_method") or "-"
+                    ).replace("_", " ").title()
+                })
+
+            st.dataframe(
+                payment_rows,
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("No payments recorded yet.")
+
+    st.divider()
+
+    # Quick actions
+    st.subheader("⚡ Quick Actions")
+    q1, q2, q3, q4 = st.columns(4)
+
+    with q1:
+        st.info("👥 **Members**\n\nAdd or search members.")
+
+    with q2:
+        st.info("🎫 **Membership**\n\nCreate membership & payment.")
+
+    with q3:
+        st.info("📱 **QR Attendance**\n\nMembers can self check-in.")
+
+    with q4:
+        st.info("💰 **Payments**\n\nView payment history & receipts.")
 
     st.divider()
 
     st.subheader("📋 Recent Members")
 
     if members:
-
         st.dataframe(
             [
                 {
@@ -319,9 +429,7 @@ def dashboard():
             use_container_width=True,
             hide_index=True
         )
-
     else:
-
         st.info(
             "No members yet. Add your first member from Members."
         )
@@ -334,6 +442,29 @@ def dashboard():
 def members_page():
 
     st.title("👥 Members")
+    st.caption("Manage member profiles and quickly check membership status.")
+
+    members_summary = get_members()
+    active_count = sum(
+        1 for x in members_summary
+        if x.get("membership_status") == "active"
+    )
+    expiring_count = sum(
+        1 for x in members_summary
+        if x.get("membership_status") == "expiring_soon"
+    )
+    expired_count = sum(
+        1 for x in members_summary
+        if x.get("membership_status") == "expired"
+    )
+
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("Total", len(members_summary))
+    s2.metric("Active", active_count)
+    s3.metric("Expiring", expiring_count)
+    s4.metric("Expired", expired_count)
+
+    st.divider()
 
     tab1, tab2 = st.tabs([
         "➕ Add Member",
@@ -913,6 +1044,7 @@ def generate_general_qr():
 
 def attendance_page():
     st.title("📅 Attendance")
+    st.caption("One QR for the gym. Members check in from their own phone.")
 
     tab1, tab2 = st.tabs([
         "📱 General Gym QR",
@@ -1061,7 +1193,8 @@ def public_self_checkin():
 
 def payments_page():
 
-    st.title("💰 Payments")
+    st.title("💰 Payments & Receipts")
+    st.caption("Search payment history, review revenue, and manage receipts.")
 
     result = (
         supabase
@@ -1072,39 +1205,107 @@ def payments_page():
         .execute()
     )
 
-    payments = result.data
+    payments = result.data or []
+    members = get_members()
+    member_lookup = {m["member_id"]: m for m in members}
 
-    total = sum(
-        float(x["amount"])
-        for x in payments
-        if x["payment_status"] == "paid"
+    paid = [
+        x for x in payments
+        if x.get("payment_status") == "paid"
+    ]
+
+    total_paid = sum(float(x.get("amount") or 0) for x in paid)
+
+    today = date.today()
+    month_start = today.replace(day=1)
+    month_paid = sum(
+        float(x.get("amount") or 0)
+        for x in paid
+        if x.get("payment_date") and
+        str(x["payment_date"])[:10] >= month_start.isoformat()
     )
 
-    st.metric(
-        "Total Paid",
-        f"₹{total:,.2f}"
-    )
+    c1, c2, c3 = st.columns(3)
+    c1.metric("💰 Total Paid", f"₹{total_paid:,.2f}")
+    c2.metric("📈 This Month", f"₹{month_paid:,.2f}")
+    c3.metric("🧾 Total Receipts", len(paid))
 
-    if payments:
+    st.divider()
 
-        st.dataframe(
-            [
-                {
-                    "Receipt": x["receipt_no"],
-                    "Date": x["payment_date"],
-                    "Amount": f"₹{float(x['amount']):,.2f}",
-                    "Method": x["payment_method"],
-                    "Status": x["payment_status"]
-                }
-                for x in payments
-            ],
-            use_container_width=True,
-            hide_index=True
-        )
-
-    else:
-
+    if not payments:
         st.info("No payments yet.")
+        return
+
+    search = st.text_input(
+        "🔎 Search by Member ID, member name or receipt number",
+        placeholder="Example: SW001 or Parvesh"
+    )
+
+    filtered = payments
+
+    if search.strip():
+        q = search.strip().lower()
+        filtered = []
+
+        for p in payments:
+            m = member_lookup.get(p.get("member_id"))
+            member_code = str(m.get("member_code", "")) if m else ""
+            member_name = str(m.get("full_name", "")) if m else ""
+            receipt = str(p.get("receipt_no", ""))
+
+            if (
+                q in member_code.lower()
+                or q in member_name.lower()
+                or q in receipt.lower()
+            ):
+                filtered.append(p)
+
+    st.subheader(f"📋 Payment History ({len(filtered)})")
+
+    rows = []
+    for p in filtered:
+        m = member_lookup.get(p.get("member_id"))
+
+        rows.append({
+            "Receipt": p.get("receipt_no") or "-",
+            "Member ID": m["member_code"] if m else "-",
+            "Member": m["full_name"] if m else "-",
+            "Date": p.get("payment_date") or "-",
+            "Amount": f"₹{float(p.get('amount') or 0):,.2f}",
+            "Method": str(
+                p.get("payment_method") or "-"
+            ).replace("_", " ").title(),
+            "Status": str(p.get("payment_status") or "-").title()
+        })
+
+    st.dataframe(
+        rows,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    if not filtered:
+        st.warning("No payments match your search.")
+
+    st.divider()
+    st.subheader("ℹ️ Receipt")
+
+    st.caption(
+        "New receipts are generated automatically after creating a membership "
+        "and payment from the Membership page."
+    )
+
+
+# =========================================================
+# APP FOOTER
+# =========================================================
+
+def app_footer():
+    st.divider()
+    st.caption(
+        "🏋️ Sky Walk Gym Management System • "
+        "Membership • Payments • Attendance"
+    )
 
 
 # =========================================================
