@@ -238,6 +238,61 @@ def dashboard():
 
     st.divider()
 
+    # =====================================================
+    # MEMBERSHIP EXPIRY ALERTS
+    # =====================================================
+
+    expired = [
+        x for x in members
+        if x.get("membership_status") == "expired"
+    ]
+
+    st.subheader("🔔 Membership Alerts")
+
+    if expiring:
+        st.warning(
+            f"⚠️ {len(expiring)} member(s) have membership expiring soon."
+        )
+
+        st.dataframe(
+            [
+                {
+                    "Member ID": x["member_code"],
+                    "Name": x["full_name"],
+                    "Plan": x.get("plan_name_snapshot") or "-",
+                    "Expiry Date": x.get("end_date") or "-",
+                    "Status": "Expiring Soon"
+                }
+                for x in expiring
+            ],
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.success("✅ No memberships are expiring soon.")
+
+    if expired:
+        st.error(
+            f"🚨 {len(expired)} member(s) have expired membership."
+        )
+
+        st.dataframe(
+            [
+                {
+                    "Member ID": x["member_code"],
+                    "Name": x["full_name"],
+                    "Plan": x.get("plan_name_snapshot") or "-",
+                    "Expiry Date": x.get("end_date") or "-",
+                    "Status": "Expired"
+                }
+                for x in expired
+            ],
+            use_container_width=True,
+            hide_index=True
+        )
+
+    st.divider()
+
     st.subheader("📋 Recent Members")
 
     if members:
