@@ -5,6 +5,12 @@ from dateutil.relativedelta import relativedelta
 import qrcode
 import io
 
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+
 
 st.set_page_config(
     page_title="Sky Walk Gym",
@@ -573,6 +579,111 @@ def plans_page():
 
 
 # =========================================================
+# PAYMENT RECEIPT PDF
+# =========================================================
+
+def generate_receipt_pdf(
+    receipt_no,
+    member,
+    plan,
+    purchased_on,
+    start_date,
+    end_date,
+    amount,
+    discount,
+    payment_method,
+    transaction_ref
+):
+    """Generate a professional PDF payment receipt."""
+    buffer = io.BytesIO()
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=45,
+        leftMargin=45,
+        topMargin=45,
+        bottomMargin=45
+    )
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "ReceiptTitle",
+        parent=styles["Title"],
+        alignment=TA_CENTER,
+        fontSize=22,
+        leading=26,
+        spaceAfter=6
+    )
+    subtitle_style = ParagraphStyle(
+        "ReceiptSubtitle",
+        parent=styles["Normal"],
+        alignment=TA_CENTER,
+        fontSize=10,
+        textColor=colors.grey,
+        spaceAfter=18
+    )
+
+    story = []
+
+    story.append(Paragraph("SKY WALK GYM", title_style))
+    story.append(Paragraph("Membership Payment Receipt", subtitle_style))
+
+    receipt_info = [
+        ["Receipt No.", str(receipt_no), "Payment Date", purchased_on.strftime("%d-%m-%Y")],
+        ["Member ID", str(member["member_code"]), "Member Name", str(member["full_name"])],
+    ]
+
+    info_table = Table(receipt_info, colWidths=[85, 150, 85, 150])
+    info_table.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.lightgrey),
+        ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke),
+        ("BACKGROUND", (2, 0), (2, -1), colors.whitesmoke),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("FONTNAME", (2, 0), (2, -1), "Helvetica-Bold"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("PADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story.append(info_table)
+    story.append(Spacer(1, 18))
+
+    membership_data = [
+        ["Membership Details", "Value"],
+        ["Plan", str(plan["name"])],
+        ["Duration", f'{plan["duration_months"]} Month(s)'],
+        ["Membership Start", start_date.strftime("%d-%m-%Y")],
+        ["Membership End", end_date.strftime("%d-%m-%Y")],
+        ["Plan Price", f'Rs. {float(plan["price"]):,.2f}'],
+        ["Discount", f"Rs. {float(discount):,.2f}"],
+        ["Amount Paid", f"Rs. {float(amount):,.2f}"],
+        ["Payment Method", str(payment_method).replace("_", " ").title()],
+        ["Transaction Reference", str(transaction_ref or "-")],
+    ]
+
+    membership_table = Table(membership_data, colWidths=[220, 250])
+    membership_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.lightgrey),
+        ("ALIGN", (1, 1), (1, -1), "RIGHT"),
+        ("PADDING", (0, 0), (-1, -1), 8),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    story.append(membership_table)
+    story.append(Spacer(1, 24))
+
+    story.append(Paragraph(
+        "Thank you for choosing Sky Walk Gym. Keep this receipt for your records.",
+        styles["Normal"]
+    ))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+# =========================================================
 # MEMBERSHIP
 # =========================================================
 
@@ -722,6 +833,27 @@ def membership_page():
 
             st.success(
                 f"Membership created! Receipt: {receipt_no}"
+            )
+
+            receipt_pdf = generate_receipt_pdf(
+                receipt_no=receipt_no,
+                member=member,
+                plan=plan,
+                purchased_on=purchased_on,
+                start_date=start_date,
+                end_date=end_date,
+                amount=amount,
+                discount=discount,
+                payment_method=payment_method,
+                transaction_ref=transaction_ref
+            )
+
+            st.download_button(
+                label="📄 Download Payment Receipt (PDF)",
+                data=receipt_pdf,
+                file_name=f"{receipt_no}.pdf",
+                mime="application/pdf",
+                use_container_width=True
             )
 
         except Exception as e:
